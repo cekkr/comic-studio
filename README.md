@@ -10,6 +10,7 @@ Install Node.js 22 or newer, then:
 
 ```sh
 git clone https://github.com/cekkr/comic-studio.git --recurse-submodules
+cd comic-studio
 # or normal clone and then
 git submodule update --init --recursive
 
