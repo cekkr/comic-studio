@@ -24,6 +24,7 @@ For a fresh checkout, clone with `git clone --recurse-submodules <repository-url
 
 - Choose or drop a PNG, JPEG, WebP, GIF, AVIF, or BMP image. The sample canvas provides a quick way to try the editor.
 - Click a style in the toolbox to add a balloon. Drag the text or the green grip to move it; drag the corner handle to resize.
+- New balloons inherit the last selected balloon's typeface, size, text color, alignment, bold, and italic settings. These text defaults are remembered in local storage across image changes and page reloads. The chosen toolbox style still determines the new balloon shape. With no remembered settings, the initial font size adapts to the image width; if an imported font is no longer available, the Comic typeface is used.
 - Edit dialogue in the right panel, or double-click it on the canvas. Escape or clicking outside finishes inline editing. Text that exceeds the content box is clipped: enlarge the box or reduce the font size to fit it.
 - Select a balloon, then drag its orange tail handles. The panel also provides precise tip and curve coordinates, automatic/manual curvature, and up to eight tails.
 - Use Fit and the zoom buttons to navigate. Arrow keys move the selected balloon; Shift moves it by ten pixels. Delete/Backspace removes it. Ctrl/⌘ Z and Ctrl/⌘ Shift Z undo/redo, with up to 50 history steps.

@@ -19,6 +19,11 @@ export const MAX_PIXELS = 32_000_000;
 export const MAX_DIMENSION = 8192;
 const finite = (n, min, max) => typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max;
 const color = (s) => typeof s === 'string' && (/^#[\da-f]{6}$/i.test(s) || s === 'transparent');
+export const TEXT_SETTINGS_KEY = 'comic-studio.text-settings.v1';
+export function textSettings(source) {
+  if (!source || typeof source.fontFamily !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(source.fontFamily) || ['__proto__', 'constructor', 'prototype'].includes(source.fontFamily) || !finite(source.fontSize, 6, 300) || !color(source.textColor) || !['left', 'center', 'right'].includes(source.align) || typeof source.bold !== 'boolean' || typeof source.italic !== 'boolean') return null;
+  return { fontFamily: source.fontFamily, fontSize: source.fontSize, textColor: source.textColor, align: source.align, bold: source.bold, italic: source.italic };
+}
 function requireValue(ok, message) { if (!ok) throw new Error(message); }
 
 export function validateProject(data) {

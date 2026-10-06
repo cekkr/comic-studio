@@ -146,3 +146,31 @@ test('adding a font folder discovers its typeface without server restart or sour
     const download = await exportImage(page); expect((await readFile(await download.path())).readUInt32BE(16)).toBe(1200);
   } finally { await rm(folder, { recursive: true }); }
 });
+
+test('new balloons inherit selected typography and retain defaults through reloads and deselection', async ({ page }) => {
+  const errors = watchErrors(page); await sample(page);
+  const settings = { fontFamily: 'anime-ace', fontSize: 37, textColor: '#804020', align: 'left', bold: true, italic: true };
+  await page.locator('#font-family').selectOption(settings.fontFamily); await page.locator('#font-size').fill(String(settings.fontSize));
+  await page.locator('#text-color').fill(settings.textColor); await page.locator('#text-align').selectOption(settings.align); await page.locator('#bold').click(); await page.locator('#italic').click();
+  await page.getByRole('button', { name: 'Thought', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(3);
+  const typography = b => Object.fromEntries(Object.keys(settings).map(key => [key, b[key]]));
+  let saved = await savedProject(page); expect(typography(saved.balloons[2])).toEqual(settings); expect(saved.balloons[2].spec.style).toBe('thought');
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('comic-studio.text-settings.v1'))); expect(stored).toEqual(settings);
+  await page.locator('.balloon-item').first().click(); await page.getByRole('button', { name: 'Caption', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(4);
+  saved = await savedProject(page); expect(typography(saved.balloons[3])).toEqual(typography(saved.balloons[0]));
+  await page.locator('.balloon-item').nth(1).click(); await page.locator('#document-name').click(); await page.keyboard.press('Escape'); await expect(page.locator('#selection')).toBeHidden();
+  await page.getByRole('button', { name: 'Shout', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(5);
+  saved = await savedProject(page); expect(typography(saved.balloons[4])).toEqual(settings);
+  await page.reload(); await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
+  saved = await savedProject(page); expect(typography(saved.balloons[0])).toEqual(settings); expect(typography(saved.balloons[1])).toEqual(settings);
+  expect(errors).toEqual([]);
+});
+
+test('invalid stored settings and missing fonts fall back safely', async ({ page }) => {
+  await page.goto('/'); await page.evaluate(() => localStorage.setItem('comic-studio.text-settings.v1', '{bad json')); await page.reload();
+  await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
+  expect((await savedProject(page)).balloons[0].fontSize).toBe(28);
+  await page.evaluate(() => localStorage.setItem('comic-studio.text-settings.v1', JSON.stringify({ fontFamily: 'missing-font', fontSize: 43, textColor: '#123456', align: 'right', bold: false, italic: false })));
+  await page.reload(); await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
+  const b = (await savedProject(page)).balloons[0]; expect(b.fontFamily).toBe('comic'); expect(b.fontSize).toBe(43); expect(b.align).toBe('right');
+});

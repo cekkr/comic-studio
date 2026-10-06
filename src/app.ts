@@ -1,10 +1,11 @@
 import { Bubble, Comical } from '../vendor/comical-js/src/index';
 import type { BubbleSpec, TailSpec } from '../vendor/comical-js/src/bubbleSpec';
 import { toCanvas } from 'html-to-image';
-import { styles, fonts, registerFonts, History, clamp, validateProject, MAX_PIXELS, MAX_DIMENSION } from './model.mjs';
+import { styles, fonts, registerFonts, History, clamp, validateProject, textSettings, TEXT_SETTINGS_KEY, MAX_PIXELS, MAX_DIMENSION } from './model.mjs';
 
 type Balloon = { id: string; text: string; x: number; y: number; width: number; height: number; fontFamily: string; fontSize: number; textColor: string; align: string; bold: boolean; italic: boolean; spec: BubbleSpec };
 type Project = { version: number; image: { src: string; name: string; width: number; height: number } | null; balloons: Balloon[] };
+type TextSettings = Pick<Balloon, 'fontFamily' | 'fontSize' | 'textColor' | 'align' | 'bold' | 'italic'>;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id);
 const value = (id: string) => ($<HTMLInputElement | HTMLSelectElement>(id)).value;
@@ -14,6 +15,12 @@ const history = new History();
 let project: Project = { version: 1, image: null, balloons: [] };
 let selectedId: string | null = null, tailIndex = 0, zoom = 1, fitted = true, busy = false;
 let historyTimer: ReturnType<typeof setTimeout>, toastTimer: ReturnType<typeof setTimeout>;
+let rememberedText: TextSettings | null = null;
+try { rememberedText = textSettings(JSON.parse(localStorage.getItem(TEXT_SETTINGS_KEY) || 'null')); } catch { /* Storage may be blocked or contain invalid JSON. */ }
+function rememberText(b: Balloon) {
+  rememberedText = textSettings(b);
+  try { localStorage.setItem(TEXT_SETTINGS_KEY, JSON.stringify(rememberedText)); } catch { /* Keep the in-memory defaults if storage is unavailable. */ }
+}
 const selected = () => project.balloons.find(b => b.id === selectedId);
 const element = (b: Balloon) => stage.querySelector<HTMLElement>(`[data-id="${CSS.escape(b.id)}"]`)!;
 const systemFontIds = new Set(Object.keys(fonts));
@@ -149,6 +156,7 @@ function refreshInspector() {
   const b = selected(); $('properties').hidden = !b; $('no-selection').hidden = !!b;
   $('selection-number').textContent = b ? ` / ${String(project.balloons.indexOf(b) + 1).padStart(2, '0')}` : '';
   if (!b) return;
+  rememberText(b);
   const s = b.spec;
   const fields = { text: b.text, style: s.style, 'font-family': b.fontFamily, 'font-size': b.fontSize, 'text-color': b.textColor, 'text-align': b.align, shadow: s.shadowOffset || 0, 'corner-x': s.cornerRadiusX || 0, 'corner-y': s.cornerRadiusY || 0, 'position-x': Math.round(b.x), 'position-y': Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height), level: s.level, order: s.order || 0, 'outer-color': s.outerBorderColor || '#90aa61' };
   Object.entries(fields).forEach(([id, v]) => setValue(id, v));
@@ -191,7 +199,7 @@ function refreshTails() {
 }
 function edit(change: (b: Balloon) => void, refresh = true) {
   const b = selected(); if (!b || busy) return;
-  syncFromDom(); change(b); applyText(b); writeSpec(b); redraw(); renderList();
+  syncFromDom(); change(b); rememberText(b); applyText(b); writeSpec(b); redraw(); renderList();
   if (refresh) refreshInspector(); commitSoon();
 }
 function defaultTail(b: Balloon): TailSpec {
@@ -205,11 +213,14 @@ function nextLevel() {
   for (let level = 1; level <= 999; level++) if (!used.has(level)) return level;
   return 1;
 }
-function addBalloon(style: string, text = 'What happens next?') {
+async function addBalloon(style: string, text = 'What happens next?') {
+  await fontCatalogReady;
   if (!project.image || busy) return;
   if (project.balloons.length >= 100) return toast('The canvas supports up to 100 balloons.');
   commit(); const image = project.image, count = project.balloons.length;
   const b: Balloon = { id: crypto.randomUUID(), text, x: image.width * (.18 + (count % 3) * .18), y: image.height * (.15 + (count % 3) * .16), width: Math.max(20, Math.min(300, image.width * .25)), height: Math.max(20, Math.min(120, image.height * .14)), fontFamily: 'comic', fontSize: clamp(Math.round(image.width * .023), 6, 48), textColor: '#252823', align: 'center', bold: false, italic: false, spec: { version: '1.0', style, level: nextLevel(), tails: [], backgroundColors: ['#ffffff'] } };
+  const previousText = textSettings(selected()) || rememberedText;
+  if (previousText) Object.assign(b, previousText, { fontFamily: Object.hasOwn(fonts, previousText.fontFamily) ? previousText.fontFamily : 'comic' });
   if (['speech', 'thought', 'shout', 'ellipse', 'caption-withTail'].includes(style)) b.spec.tails = [defaultTail(b)];
   if (style === 'caption') { b.spec.shadowOffset = 5; b.spec.backgroundColors = ['#fff6cc', '#e9d797']; }
   if (style === 'none') b.spec.backgroundColors = ['transparent'];
@@ -390,8 +401,8 @@ $('demo').addEventListener('click', async () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><rect width="1200" height="850" fill="#d8e4d0"/><circle cx="927" cy="191" r="76" fill="#f7e5a1"/><path d="M0 450L240 215L533 495L738 320L1033 553L1200 400V850H0Z" fill="#a6b695"/><path d="M0 544L257 364L516 603L799 421L1200 621V850H0Z" fill="#7e997b"/><path d="M0 680Q330 558 651 718Q943 527 1200 610V850H0Z" fill="#486c59"/><path d="M0 790Q307 657 580 790Q926 715 1200 828V850H0Z" fill="#304d3c"/><path d="M423 850Q695 709 714 605Q729 559 779 551" fill="none" stroke="#e0d8ac" stroke-width="35"/><g fill="#253f32"><rect x="937" y="431" width="15" height="211"/><path d="M944 320L888 458H920L866 534H1024L969 458H1000Z"/><rect x="162" y="548" width="12" height="163"/><path d="M168 446L113 584H140L106 646H232L196 584H223Z"/></g><g stroke="#263c31" stroke-width="12" stroke-linecap="round"><path d="M590 659L580 723M598 659L619 720M583 594L557 648M607 594L625 645"/><path d="M694 652L680 716M700 652L719 714M682 590L661 638M706 590L733 613"/></g><g><path d="M573 588Q594 575 616 588L622 659H565Z" fill="#f2d08a"/><circle cx="594" cy="560" r="25" fill="#d4a080"/><path d="M570 556Q571 519 609 533L619 552Z" fill="#283c32"/><path d="M672 585Q696 572 714 585L720 653H665Z" fill="#a9c1b1"/><circle cx="695" cy="557" r="24" fill="#e2b999"/><path d="M670 548Q678 519 706 531Q724 539 721 566L709 547Z" fill="#694f3c"/><path d="M567 599L559 637L578 649L588 604Z" fill="#bf784e"/></g><text x="43" y="803" font-family="Arial" font-size="13" letter-spacing="4" fill="#b9cdb1">A GOOD DAY TO GET LOST.</text></svg>`;
     const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`); const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 850; canvas.getContext('2d')!.drawImage(img, 0, 0);
     commit(); await restore({ version: 1, image: { src: canvas.toDataURL('image/png'), name: 'a-good-day.png', width: 1200, height: 850 }, balloons: [] }); busy = false;
-    addBalloon('speech', 'Are we lost?'); const first = selected()!; first.x = 355; first.y = 255; first.width = 210; first.height = 80; first.spec.tails = [{ tipX: 595, tipY: 554, midpointX: 508, midpointY: 403, autoCurve: true }]; applyText(first); writeSpec(first);
-    addBalloon('speech', 'Only if we stop exploring.'); const second = selected()!; second.x = 744; second.y = 349; second.width = 242; second.height = 91; second.spec.tails = [{ tipX: 700, tipY: 552, midpointX: 769, midpointY: 497, autoCurve: true }]; applyText(second); writeSpec(second); redraw(); refreshInspector(); commit();
+    await addBalloon('speech', 'Are we lost?'); const first = selected()!; first.x = 355; first.y = 255; first.width = 210; first.height = 80; first.spec.tails = [{ tipX: 595, tipY: 554, midpointX: 508, midpointY: 403, autoCurve: true }]; applyText(first); writeSpec(first);
+    await addBalloon('speech', 'Only if we stop exploring.'); const second = selected()!; second.x = 744; second.y = 349; second.width = 242; second.height = 91; second.spec.tails = [{ tipX: 700, tipY: 552, midpointX: 769, midpointY: 497, autoCurve: true }]; applyText(second); writeSpec(second); redraw(); refreshInspector(); commit();
   } catch (e) { console.error(e); toast('The sample could not be loaded. Choose a local image to begin.'); } finally { busy = false; }
 });
 
