@@ -11,11 +11,23 @@ async function savedProject(page) {
   const promise = page.waitForEvent('download'); await page.getByRole('button', { name: 'Save project' }).click();
   return JSON.parse(await readFile(await (await promise).path(), 'utf8'));
 }
-async function exportImage(page, format = 'png') {
+async function exportImage(page, format = 'png', content = 'complete') {
   await page.getByRole('button', { name: 'Export image' }).click();
+  await page.locator('#export-content').selectOption(content);
   await page.locator('#export-format').selectOption(format);
   const promise = page.waitForEvent('download'); await page.getByRole('button', { name: 'Download image' }).click();
   return await promise;
+}
+async function imageFixture(page, name, color, width = 640, height = 480) {
+  const data = await page.evaluate(({ color, width, height }) => { const c = document.createElement('canvas'); c.width = width; c.height = height; const ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, width, height); return c.toDataURL('image/png').split(',')[1]; }, { color, width, height });
+  return { name, mimeType: 'image/png', buffer: Buffer.from(data, 'base64') };
+}
+async function storedWorkspace(page) {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open('comic-studio-workspace', 1);
+    request.onsuccess = () => { const db = request.result, read = db.transaction('workspace').objectStore('workspace').get('tabs'); read.onsuccess = () => { resolve(read.result); db.close(); }; read.onerror = () => reject(read.error); };
+    request.onerror = () => reject(request.error);
+  }));
 }
 function watchErrors(page) { const errors = []; page.on('pageerror', error => errors.push(error.message)); return errors; }
 
@@ -80,6 +92,7 @@ test('local upload, transparent image, JPEG and WebP export', async ({ page }) =
   await expect(page.locator('#document-name')).toHaveText('local.png'); await page.getByRole('button', { name: 'Caption', exact: true }).click();
   await page.locator('#corner-x').fill('15'); await page.locator('#corner-y').fill('20');
   for (const format of ['png', 'jpeg', 'webp']) {
+    if (format === 'webp' && await page.locator('#export-format option[value="webp"]').evaluate(option => option.disabled)) continue;
     const download = await exportImage(page, format); expect(download.suggestedFilename()).toBe(`local-comic.${format}`);
     const bytes = await readFile(await download.path());
     const decoded = await page.evaluate(async ({ data, format }) => {
@@ -161,16 +174,77 @@ test('new balloons inherit selected typography and retain defaults through reloa
   await page.locator('.balloon-item').nth(1).click(); await page.locator('#document-name').click(); await page.keyboard.press('Escape'); await expect(page.locator('#selection')).toBeHidden();
   await page.getByRole('button', { name: 'Shout', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(5);
   saved = await savedProject(page); expect(typography(saved.balloons[4])).toEqual(settings);
-  await page.reload(); await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
+  await page.reload(); await page.locator('#image-file').setInputFiles(await imageFixture(page, 'remembered.png', '#ffffff'));
+  await expect(page.locator('#document-name')).toHaveText('remembered.png');
+  await page.getByRole('button', { name: 'Speech', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Thought', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
   saved = await savedProject(page); expect(typography(saved.balloons[0])).toEqual(settings); expect(typography(saved.balloons[1])).toEqual(settings);
   expect(errors).toEqual([]);
 });
 
 test('invalid stored settings and missing fonts fall back safely', async ({ page }) => {
+  // Test preferences independently of the typography in restored image tabs.
+  await page.addInitScript(() => indexedDB.deleteDatabase('comic-studio-workspace'));
   await page.goto('/'); await page.evaluate(() => localStorage.setItem('comic-studio.text-settings.v1', '{bad json')); await page.reload();
   await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
   expect((await savedProject(page)).balloons[0].fontSize).toBe(28);
   await page.evaluate(() => localStorage.setItem('comic-studio.text-settings.v1', JSON.stringify({ fontFamily: 'missing-font', fontSize: 43, textColor: '#123456', align: 'right', bold: false, italic: false })));
   await page.reload(); await page.getByRole('button', { name: 'Try the sample canvas' }).click(); await expect(page.locator('.comic-text')).toHaveCount(2);
   const b = (await savedProject(page)).balloons[0]; expect(b.fontFamily).toBe('comic'); expect(b.fontSize).toBe(43); expect(b.align).toBe('right');
+});
+
+test('first export includes the background and every download requires content and format choices', async ({ page }) => {
+  const errors = watchErrors(page), downloadEvents = []; page.on('download', download => downloadEvents.push(download)); await page.goto('/');
+  await page.locator('#image-file').setInputFiles(await imageFixture(page, 'first-export.png', '#5a8cb7'));
+  await expect(page.locator('#document-name')).toHaveText('first-export.png'); await page.getByRole('button', { name: 'Speech', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Export image' }).click(); await expect(page.locator('#download')).toBeDisabled();
+  await page.locator('#export-format').selectOption('png'); await expect(page.locator('#download')).toBeDisabled();
+  await page.locator('#export-content').selectOption('complete');
+  const firstPromise = page.waitForEvent('download'); await page.locator('#download').click(); const first = await firstPromise;
+  const downloads = [first, await exportImage(page), await exportImage(page, 'png', 'balloons')];
+  for (const [index, download] of downloads.entries()) {
+    const pixels = await page.evaluate(async data => {
+      const img = new Image(); img.src = `data:image/png;base64,${data}`; await img.decode(); const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const region = ctx.getImageData(90, 50, 210, 120).data; let white = 0, ink = 0;
+      for (let i = 0; i < region.length; i += 4) { if (region[i] > 245 && region[i + 1] > 245 && region[i + 2] > 245 && region[i + 3] > 200) white++; if (region[i] < 70 && region[i + 1] < 70 && region[i + 2] < 70 && region[i + 3] > 200) ink++; }
+      return { background: Array.from(ctx.getImageData(10, 400, 1, 1).data), white, ink };
+    }, (await readFile(await download.path())).toString('base64'));
+    expect(pixels.background).toEqual(index < 2 ? [90, 140, 183, 255] : [0, 0, 0, 0]); expect(pixels.white).toBeGreaterThan(1000); expect(pixels.ink).toBeGreaterThan(100);
+  }
+  expect(downloads[2].suggestedFilename()).toBe('first-export-balloons.png');
+  expect(downloadEvents).toHaveLength(3);
+  await page.getByRole('button', { name: 'Export image' }).click(); await expect(page.locator('#export-content')).toHaveValue(''); await expect(page.locator('#export-format')).toHaveValue(''); await expect(page.locator('#download')).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
+test('image tabs preserve edits, typography, zoom, and independent undo histories', async ({ page }) => {
+  const errors = watchErrors(page); await sample(page); await page.locator('#text').fill('First image dialogue'); await page.locator('#font-size').fill('31'); await page.locator('#zoom-out').click();
+  const firstZoom = await page.locator('#zoom-label').textContent(); const firstState = await savedProject(page);
+  await page.locator('#image-file').setInputFiles(await imageFixture(page, 'second.png', '#d49b7c'));
+  await expect(page.getByRole('tab')).toHaveCount(2); await expect(page.locator('#document-name')).toHaveText('second.png'); await expect(page.locator('.comic-text')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Thought', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(1); await page.locator('#text').fill('Second image dialogue'); await savedProject(page);
+  await page.getByRole('tab', { name: 'a-good-day.png', exact: true }).click(); await expect(page.locator('#text')).toHaveValue('First image dialogue'); await expect(page.locator('#zoom-label')).toHaveText(firstZoom);
+  expect(await savedProject(page)).toEqual(firstState);
+  await page.locator('#undo').click(); await expect(page.locator('#text')).toHaveValue('Only if we stop exploring.'); await page.locator('#redo').click(); await expect(page.locator('#text')).toHaveValue('First image dialogue');
+  await page.getByRole('tab', { name: 'second.png', exact: true }).click(); await expect(page.locator('#text')).toHaveValue('Second image dialogue'); await page.locator('#undo').click(); await expect(page.locator('#text')).toHaveValue('What happens next?');
+  await page.locator('#redo').click(); await expect(page.locator('#text')).toHaveValue('Second image dialogue');
+  await expect.poll(async () => (await storedWorkspace(page))?.tabs.map(tab => tab.project.image?.name)).toEqual(['a-good-day.png', 'second.png']);
+  await expect.poll(async () => (await storedWorkspace(page))?.tabs[1].project.balloons[0].text).toBe('Second image dialogue');
+  await page.reload(); await expect(page.getByRole('tab')).toHaveCount(2); await expect(page.locator('#document-name')).toHaveText('second.png'); await expect(page.locator('#text')).toHaveValue('Second image dialogue');
+  await page.getByRole('tab', { name: 'a-good-day.png', exact: true }).click(); await expect(page.locator('#text')).toHaveValue('First image dialogue'); await expect(page.locator('#zoom-label')).toHaveText(firstZoom);
+  await page.getByRole('button', { name: 'Close second.png', exact: true }).click(); await expect(page.getByRole('tab')).toHaveCount(1); await expect(page.locator('#text')).toHaveValue('First image dialogue');
+  await page.getByRole('button', { name: 'Close a-good-day.png', exact: true }).click(); await expect(page.getByRole('tab', { name: 'Untitled', exact: true })).toBeVisible(); await expect(page.locator('#empty-state')).toBeVisible();
+  await expect.poll(async () => (await storedWorkspace(page))?.tabs.every(tab => !tab.project.image)).toBe(true);
+  await page.reload(); await expect(page.locator('#empty-state')).toBeVisible(); await expect(page.getByRole('tab')).toHaveCount(1); expect(errors).toEqual([]);
+});
+
+test('opening multiple images and a project keeps existing tabs and closes only the chosen canvas', async ({ page }) => {
+  const errors = watchErrors(page); await page.goto('/');
+  await page.locator('#image-file').setInputFiles([await imageFixture(page, 'one.png', '#76906b'), await imageFixture(page, 'two.png', '#e8d58b')]);
+  await expect(page.getByRole('tab')).toHaveCount(2); await expect(page.locator('#document-name')).toHaveText('two.png'); await page.getByRole('button', { name: 'Caption', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(1);
+  await page.locator('#text').fill('Saved project dialogue'); const saved = await savedProject(page); saved.image.name = 'reopened.png';
+  await page.locator('#project-file').setInputFiles({ name: 'reopened.comic.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(saved)) });
+  await expect(page.getByRole('tab')).toHaveCount(3); await expect(page.locator('#text')).toHaveValue('Saved project dialogue');
+  await page.getByRole('button', { name: 'Close reopened.png', exact: true }).click(); await expect(page.locator('#document-name')).toHaveText('two.png'); await expect(page.locator('#text')).toHaveValue('Saved project dialogue');
+  await page.getByRole('tab', { name: 'one.png', exact: true }).click(); await expect(page.locator('.comic-text')).toHaveCount(0); await page.screenshot({ path: 'test-results/tabs.png' }); expect(errors).toEqual([]);
 });

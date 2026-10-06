@@ -1,21 +1,27 @@
 import { Bubble, Comical } from '../vendor/comical-js/src/index';
 import type { BubbleSpec, TailSpec } from '../vendor/comical-js/src/bubbleSpec';
 import { toCanvas } from 'html-to-image';
+import { readWorkspace, writeWorkspace } from './workspace.mjs';
 import { styles, fonts, registerFonts, History, clamp, validateProject, textSettings, TEXT_SETTINGS_KEY, MAX_PIXELS, MAX_DIMENSION } from './model.mjs';
 
 type Balloon = { id: string; text: string; x: number; y: number; width: number; height: number; fontFamily: string; fontSize: number; textColor: string; align: string; bold: boolean; italic: boolean; spec: BubbleSpec };
 type Project = { version: number; image: { src: string; name: string; width: number; height: number } | null; balloons: Balloon[] };
 type TextSettings = Pick<Balloon, 'fontFamily' | 'fontSize' | 'textColor' | 'align' | 'bold' | 'italic'>;
+type TabView = { selectedId: string | null; tailIndex: number; zoom: number; fitted: boolean; scrollLeft: number; scrollTop: number };
+type ImageTab = TabView & { id: string; project: Project; history: History };
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id);
 const value = (id: string) => ($<HTMLInputElement | HTMLSelectElement>(id)).value;
 const number = (id: string, min: number, max: number) => clamp(Number(value(id)) || 0, min, max);
 const stage = $('stage'), viewport = $('viewport'), wrapper = $('stage-wrapper');
-const history = new History();
+let history = new History();
 let project: Project = { version: 1, image: null, balloons: [] };
 let selectedId: string | null = null, tailIndex = 0, zoom = 1, fitted = true, busy = false;
 let historyTimer: ReturnType<typeof setTimeout>, toastTimer: ReturnType<typeof setTimeout>;
 let rememberedText: TextSettings | null = null;
+const initialTab: ImageTab = { id: crypto.randomUUID(), project, history, selectedId: null, tailIndex: 0, zoom: 1, fitted: true, scrollLeft: 0, scrollTop: 0 };
+let tabs = [initialTab], activeTabId = initialTab.id;
+let workspaceReady = Promise.resolve(), workspaceLoaded = false, workspaceSaveTimer: ReturnType<typeof setTimeout>, storageWarningShown = false;
 try { rememberedText = textSettings(JSON.parse(localStorage.getItem(TEXT_SETTINGS_KEY) || 'null')); } catch { /* Storage may be blocked or contain invalid JSON. */ }
 function rememberText(b: Balloon) {
   rememberedText = textSettings(b);
@@ -44,7 +50,7 @@ function syncFromDom() {
   }
 }
 function commit() {
-  clearTimeout(historyTimer); syncFromDom(); history.push(project); updateHistory();
+  clearTimeout(historyTimer); syncFromDom(); history.push(project); updateHistory(); saveWorkspaceSoon();
 }
 function commitSoon() { clearTimeout(historyTimer); historyTimer = setTimeout(commit, 350); }
 function updateHistory() { input('undo').disabled = !history.canUndo; input('redo').disabled = !history.canRedo; }
@@ -92,9 +98,11 @@ function clearComical() {
   Comical.activateElement(undefined); Comical.stopEditing(); data?.project.remove();
   stage.querySelectorAll('.comic-text,.comical-generated').forEach(el => el.remove());
 }
-async function restore(next: Project) {
+async function restore(next: Project, view?: TabView) {
   if (next.image) await loadImage(next.image.src);
-  clearComical(); project = next; selectedId = project.balloons.at(-1)?.id || null;
+  clearComical(); project = next; selectedId = view ? view.selectedId : project.balloons.at(-1)?.id || null;
+  if (!project.balloons.some(b => b.id === selectedId)) selectedId = null;
+  tailIndex = view?.tailIndex || 0;
   wrapper.hidden = !project.image; $('empty-state').hidden = !!project.image;
   if (project.image) {
     const { width, height, src, name } = project.image;
@@ -102,12 +110,111 @@ async function restore(next: Project) {
     $<HTMLImageElement>('background').src = src;
     $('document-name').textContent = name; $('dimensions').textContent = `${width} × ${height}`;
     project.balloons.forEach(createBalloonElement); Comical.startEditing([stage]); fit();
+    if (view && !view.fitted) { fitted = false; setZoom(view.zoom); }
+    viewport.scrollLeft = view?.scrollLeft || 0; viewport.scrollTop = view?.scrollTop || 0;
     $('workspace-hint').textContent = 'Drag to move · double-click to edit · orange dots shape tails';
   } else { $('document-name').textContent = 'A fresh start'; $('dimensions').textContent = ''; $('workspace-hint').textContent = 'A blank canvas. A thousand possibilities.'; }
   renderList(); refreshInspector(); refreshSelection(); updateHistory();
   document.querySelectorAll<HTMLButtonElement>('.style-card').forEach(button => button.disabled = !project.image);
   input('export').disabled = !project.image; input('save-project').disabled = !project.image;
   if (selected()) Comical.activateElement(element(selected()!));
+}
+
+function captureTab() {
+  const tab = tabs.find(tab => tab.id === activeTabId)!;
+  Object.assign(tab, { project, history, selectedId, tailIndex, zoom, fitted, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop });
+}
+function workspaceSnapshot() {
+  captureTab();
+  return { version: 1, activeTabId, tabs: tabs.map(({ history, ...tab }) => tab) };
+}
+function saveWorkspaceSoon() {
+  if (!workspaceLoaded) return;
+  captureTab(); clearTimeout(workspaceSaveTimer);
+  workspaceSaveTimer = setTimeout(() => void writeWorkspace(workspaceSnapshot()).catch(() => {
+    if (!storageWarningShown) { storageWarningShown = true; toast('Browser storage is unavailable or full. Save your projects to keep them after closing the browser.'); }
+  }), 400);
+}
+function flushWorkspace() {
+  if (!workspaceLoaded) return Promise.resolve();
+  clearTimeout(workspaceSaveTimer); syncFromDom();
+  return writeWorkspace(workspaceSnapshot()).catch(() => {
+    if (!storageWarningShown) { storageWarningShown = true; toast('Browser storage is unavailable or full. Save your projects to keep them after closing the browser.'); }
+  });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void flushWorkspace(); });
+window.addEventListener('pagehide', () => void flushWorkspace());
+function renderTabs() {
+  const list = $('image-tabs'); list.replaceChildren();
+  for (const tab of tabs) {
+    const item = document.createElement('div'); item.className = `image-tab${tab.id === activeTabId ? ' active' : ''}`;
+    const name = tab.project.image?.name || 'Untitled';
+    const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(tab.id === activeTabId)); button.setAttribute('aria-controls', 'viewport'); button.textContent = name; button.title = name;
+    button.addEventListener('click', () => void switchTab(tab.id));
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'close-tab'; close.textContent = '×'; close.setAttribute('aria-label', `Close ${name}`); close.title = 'Close image'; close.addEventListener('click', () => void closeTab(tab.id));
+    item.append(button, close); list.append(item);
+  }
+}
+function finishInlineEditing() { stage.querySelector<HTMLElement>('[contenteditable="true"]')?.blur(); }
+async function switchTab(id: string) {
+  if (busy || id === activeTabId) return;
+  const tab = tabs.find(tab => tab.id === id); if (!tab) return;
+  busy = true;
+  try {
+    // Decode before leaving the current canvas, so a damaged image cannot discard it.
+    if (tab.project.image) await loadImage(tab.project.image.src);
+    finishInlineEditing(); commit(); captureTab();
+    clearTimeout(workspaceSaveTimer); activeTabId = id; history = tab.history; await restore(tab.project, tab); renderTabs(); await flushWorkspace();
+  } catch { toast('This image could not be opened. Your current work is preserved.'); }
+  finally { busy = false; }
+}
+async function addImageTab(next: Project) {
+  finishInlineEditing(); commit(); captureTab();
+  const nextHistory = new History(); nextHistory.push(next);
+  const tab: ImageTab = { id: crypto.randomUUID(), project: next, history: nextHistory, selectedId: next.balloons.at(-1)?.id || null, tailIndex: 0, zoom: 1, fitted: true, scrollLeft: 0, scrollTop: 0 };
+  const current = tabs.find(tab => tab.id === activeTabId)!;
+  if (!current.project.image) tabs.splice(tabs.indexOf(current), 1, tab); else tabs.push(tab);
+  clearTimeout(workspaceSaveTimer); activeTabId = tab.id; history = tab.history; await restore(next, tab); renderTabs(); await flushWorkspace();
+}
+async function closeTab(id: string) {
+  if (busy) return;
+  const index = tabs.findIndex(tab => tab.id === id); if (index < 0) return;
+  if (id !== activeTabId) { tabs.splice(index, 1); renderTabs(); await flushWorkspace(); return; }
+  busy = true;
+  try {
+    finishInlineEditing(); clearTimeout(historyTimer); clearTimeout(workspaceSaveTimer); captureTab();
+    tabs.splice(index, 1);
+    if (!tabs.length) {
+      const blank: Project = { version: 1, image: null, balloons: [] }; const blankHistory = new History(); blankHistory.push(blank);
+      tabs.push({ ...initialTab, id: crypto.randomUUID(), project: blank, history: blankHistory, selectedId: null });
+    }
+    const tab = tabs[Math.min(index, tabs.length - 1)]; activeTabId = tab.id; history = tab.history;
+    await restore(tab.project, tab); renderTabs(); await flushWorkspace();
+  } finally { busy = false; }
+}
+async function initializeWorkspace() {
+  try {
+    await fontCatalogReady;
+    const saved = await readWorkspace();
+    if (saved?.version !== 1 || !Array.isArray(saved.tabs)) return;
+    const restored: ImageTab[] = [];
+    for (const tab of saved.tabs) {
+      try {
+        if (typeof tab.id !== 'string' || restored.some(other => other.id === tab.id)) continue;
+        // Removed custom fonts fall back while preserving the remaining tab contents.
+        for (const b of tab.project.balloons) if (!Object.hasOwn(fonts, b.fontFamily)) b.fontFamily = 'comic';
+        const data: Project = tab.project.image ? validateProject(tab.project) : { version: 1, image: null, balloons: [] };
+        if (data.image) await loadImage(data.image.src);
+        const restoredHistory = new History(); restoredHistory.push(data);
+        restored.push({ id: tab.id, project: data, history: restoredHistory, selectedId: tab.selectedId || null, tailIndex: Number.isInteger(tab.tailIndex) ? tab.tailIndex : 0, zoom: clamp(Number(tab.zoom) || 1, .02, 3), fitted: tab.fitted !== false, scrollLeft: Number(tab.scrollLeft) || 0, scrollTop: Number(tab.scrollTop) || 0 });
+      } catch { /* Keep the other tabs if one stored image is damaged. */ }
+    }
+    if (restored.length) {
+      tabs = restored; const tab = tabs.find(tab => tab.id === saved.activeTabId) || tabs[0]; activeTabId = tab.id; history = tab.history;
+      await restore(tab.project, tab); renderTabs();
+    }
+  } catch { /* A blocked browser database does not prevent editing in this session. */ }
+  finally { workspaceLoaded = true; }
 }
 function setZoom(scale: number) {
   if (!project.image) return;
@@ -131,6 +238,7 @@ function select(id: string | null) {
   selectedId = id; tailIndex = 0;
   Comical.activateElement(selected() ? element(selected()!) : undefined);
   renderList(); refreshInspector(); refreshSelection();
+  saveWorkspaceSoon();
 }
 Comical.setActiveBubbleListener(el => {
   const id = el?.dataset.id;
@@ -255,6 +363,7 @@ document.addEventListener('pointerup', () => {
 });
 
 async function openImage(file?: File) {
+  await workspaceReady;
   if (!file || busy) return;
   if (!/^image\/(png|jpeg|webp|gif|avif|bmp)$/.test(file.type)) return toast('Choose a PNG, JPEG, WebP, GIF, AVIF, or BMP image.');
   if (file.size > 30_000_000) return toast('Choose an image smaller than 30 MB.');
@@ -263,14 +372,15 @@ async function openImage(file?: File) {
     const src = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('Could not read this image.')); reader.readAsDataURL(file); });
     const img = await loadImage(src);
     if (img.naturalWidth > MAX_DIMENSION || img.naturalHeight > MAX_DIMENSION || img.naturalWidth * img.naturalHeight > MAX_PIXELS) throw new Error('Choose an image up to 8192 px per side and 32 megapixels.');
-    commit(); await restore({ version: 1, image: { src, name: file.name.slice(0, 255), width: img.naturalWidth, height: img.naturalHeight }, balloons: [] }); commit(); toast('Image ready. Pick a balloon from the toolbox.');
+    await addImageTab({ version: 1, image: { src, name: file.name.slice(0, 255), width: img.naturalWidth, height: img.naturalHeight }, balloons: [] }); commit(); toast('Image opened in its own tab. Pick a balloon from the toolbox.');
   } catch (e) { toast(e instanceof Error ? e.message : 'This image could not be opened.'); } finally { busy = false; }
 }
-['upload', 'empty-upload'].forEach(id => $(id).addEventListener('click', () => input('image-file').click()));
-input('image-file').addEventListener('change', () => { void openImage(input('image-file').files?.[0]); input('image-file').value = ''; });
+['upload', 'empty-upload', 'new-image-tab'].forEach(id => $(id).addEventListener('click', () => input('image-file').click()));
+async function openImages(files: File[]) { for (const file of files) await openImage(file); }
+input('image-file').addEventListener('change', () => { const files = Array.from(input('image-file').files || []); input('image-file').value = ''; void openImages(files); });
 viewport.addEventListener('dragover', e => { e.preventDefault(); viewport.classList.add('dragover'); });
 viewport.addEventListener('dragleave', e => { if (!viewport.contains(e.relatedTarget as Node)) viewport.classList.remove('dragover'); });
-viewport.addEventListener('drop', e => { e.preventDefault(); viewport.classList.remove('dragover'); void openImage(e.dataTransfer?.files[0]); });
+viewport.addEventListener('drop', e => { e.preventDefault(); viewport.classList.remove('dragover'); void openImages(Array.from(e.dataTransfer?.files || [])); });
 
 const icons: Record<string, string> = {
   speech: '<path d="M8 5Q30-4 51 6Q62 22 43 26L29 26L17 35L21 25Q-2 22 8 5Z"/>',
@@ -334,7 +444,8 @@ $('duplicate').addEventListener('click', () => {
 $('delete').addEventListener('click', deleteBalloon);
 async function undo(redo = false) {
   if (busy) return; commit(); const next = redo ? history.redo() : history.undo(); if (!next) return;
-  busy = true; try { await restore(next); } finally { busy = false; }
+  const view: TabView = { selectedId: next.balloons.some(b => b.id === selectedId) ? selectedId : next.balloons.at(-1)?.id || null, tailIndex, zoom, fitted, scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop };
+  busy = true; try { clearTimeout(workspaceSaveTimer); await restore(next, view); saveWorkspaceSoon(); } finally { busy = false; }
 }
 $('undo').addEventListener('click', () => void undo()); $('redo').addEventListener('click', () => void undo(true));
 document.addEventListener('keydown', e => {
@@ -350,7 +461,7 @@ document.addEventListener('keydown', e => {
     edit(b => { b.x = clamp(b.x + (e.key === 'ArrowLeft' ? -distance : e.key === 'ArrowRight' ? distance : 0), 0, Math.max(0, project.image!.width - b.width)); b.y = clamp(b.y + (e.key === 'ArrowUp' ? -distance : e.key === 'ArrowDown' ? distance : 0), 0, Math.max(0, project.image!.height - b.height)); });
   }
 });
-$('fit').addEventListener('click', fit); $('zoom-in').addEventListener('click', () => { fitted = false; setZoom(zoom * 1.25); }); $('zoom-out').addEventListener('click', () => { fitted = false; setZoom(zoom / 1.25); });
+$('fit').addEventListener('click', () => { fit(); saveWorkspaceSoon(); }); $('zoom-in').addEventListener('click', () => { fitted = false; setZoom(zoom * 1.25); saveWorkspaceSoon(); }); $('zoom-out').addEventListener('click', () => { fitted = false; setZoom(zoom / 1.25); saveWorkspaceSoon(); });
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 10000);
@@ -361,49 +472,78 @@ $('open-project').addEventListener('click', () => input('project-file').click())
 input('project-file').addEventListener('change', async () => {
   const file = input('project-file').files?.[0]; input('project-file').value = ''; if (!file || busy) return;
   if (file.size > 50_000_000) return toast('Choose a project smaller than 50 MB.');
-  busy = true;
+  await workspaceReady; busy = true;
   try {
     await fontCatalogReady;
     const data = validateProject(JSON.parse(await file.text())); const image = await loadImage(data.image.src);
     if (image.naturalWidth !== data.image.width || image.naturalHeight !== data.image.height) throw new Error('Project image dimensions do not match the embedded image.');
-    commit(); await restore(data); commit(); toast('Project opened. Your story is ready to edit.');
+    await addImageTab(data); commit(); toast('Project opened in a new tab. Your story is ready to edit.');
   } catch (e) { toast(e instanceof Error ? e.message : 'This project could not be opened.'); } finally { busy = false; }
 });
-$('export').addEventListener('click', () => { if (!project.image || busy) return; $('export-dimensions').textContent = `${project.image.width} × ${project.image.height} pixels · original resolution`; $<HTMLDialogElement>('export-dialog').showModal(); });
-$('export-format').addEventListener('change', () => $('quality-field').hidden = value('export-format') === 'png');
+function updateExportChoices() {
+  const format = value('export-format'), content = value('export-content');
+  $('quality-field').hidden = !format || format === 'png';
+  input('download').disabled = !format || !content;
+  $('export-content-help').textContent = content === 'balloons' ? 'PNG and WebP keep the background transparent. JPEG uses white.' : 'The original image is combined with your balloons.';
+}
+const webpOption = $<HTMLSelectElement>('export-format').querySelector<HTMLOptionElement>('option[value="webp"]')!;
+webpOption.disabled = true;
+const codecProbe = document.createElement('canvas'); codecProbe.width = codecProbe.height = 1; codecProbe.getContext('2d')!.fillRect(0, 0, 1, 1);
+codecProbe.toBlob(blob => {
+  webpOption.disabled = blob?.type !== 'image/webp';
+  if (webpOption.disabled) webpOption.textContent = 'WebP · unavailable in this browser';
+}, 'image/webp');
+$('export').addEventListener('click', () => {
+  if (!project.image || busy) return;
+  setValue('export-format', ''); setValue('export-content', ''); updateExportChoices();
+  $('export-dimensions').textContent = `${project.image.width} × ${project.image.height} pixels · original resolution`;
+  $<HTMLDialogElement>('export-dialog').showModal();
+});
+['export-format', 'export-content'].forEach(id => $(id).addEventListener('change', updateExportChoices));
 $('download').addEventListener('click', async () => {
-  if (!project.image || busy) return; busy = true; input('download').disabled = true; $('download').textContent = 'Rendering your image…';
+  const format = value('export-format'), content = value('export-content');
+  if (!project.image || busy || !['png', 'jpeg', 'webp'].includes(format) || !['complete', 'balloons'].includes(content)) return;
+  busy = true; input('download').disabled = true; $('download').textContent = 'Rendering your image…';
   let exportHost: HTMLElement | undefined;
   try {
-    await document.fonts.ready; commit();
+    // Decode the original explicitly; DOM snapshots can omit it on their first render.
+    const original = content === 'complete' ? await loadImage(project.image.src) : null;
+    await document.fonts.ready; commit(); await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     // Export Comical's SVG into a copy without modifying the live editor or tail handles.
     const copy = stage.cloneNode(true) as HTMLElement; copy.id = 'export-stage';
     Object.assign(copy.style, { transform: 'none', position: 'relative', isolation: 'isolate' }); copy.querySelector('#selection')?.remove();
+    copy.querySelector('#background')?.remove();
     copy.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
     Comical.exportSvgToCopyOfParent(stage, copy);
     const svg = copy.querySelector<SVGElement>('.comical-generated');
     if (svg) Object.assign(svg.style, { position: 'absolute', top: '0', left: '0', zIndex: '1' });
     // Move the host offscreen, leaving the exported node itself at its origin.
     exportHost = document.createElement('div'); exportHost.className = 'export-copy'; exportHost.append(copy); document.body.append(exportHost);
-    const format = value('export-format');
-    const canvas = await toCanvas(copy, { width: project.image.width, height: project.image.height, pixelRatio: 1, skipAutoScale: true, skipFonts: false, backgroundColor: format === 'jpeg' ? '#ffffff' : undefined });
+    const overlay = await toCanvas(copy, { width: project.image.width, height: project.image.height, pixelRatio: 1, skipAutoScale: true, skipFonts: false });
+    const canvas = document.createElement('canvas'); canvas.width = project.image.width; canvas.height = project.image.height;
+    const context = canvas.getContext('2d')!;
+    if (format === 'jpeg') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height); }
+    if (original) context.drawImage(original, 0, 0, canvas.width, canvas.height);
+    context.drawImage(overlay, 0, 0);
     const mime = `image/${format}`;
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('The browser could not encode this image.')), mime, Number(value('export-quality'))));
     const actualExtension = blob.type === mime ? format : 'png';
-    download(blob, `${basename()}-comic.${actualExtension}`); $<HTMLDialogElement>('export-dialog').close(); toast(`Exported ${project.image.width} × ${project.image.height} ${actualExtension.toUpperCase()}.`);
+    download(blob, `${basename()}-${content === 'complete' ? 'comic' : 'balloons'}.${actualExtension}`); $<HTMLDialogElement>('export-dialog').close(); toast(`Exported ${content === 'complete' ? 'complete image' : 'balloons'} · ${project.image.width} × ${project.image.height} ${actualExtension.toUpperCase()}.`);
   } catch (e) { console.error(e); toast('Export failed. Try PNG or use a smaller image. Your project is still editable.'); }
   finally { exportHost?.remove(); busy = false; input('download').disabled = false; $('download').textContent = 'Download image ↗'; }
 });
 
 $('demo').addEventListener('click', async () => {
+  await workspaceReady;
   if (busy) return; busy = true;
   try {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850"><rect width="1200" height="850" fill="#d8e4d0"/><circle cx="927" cy="191" r="76" fill="#f7e5a1"/><path d="M0 450L240 215L533 495L738 320L1033 553L1200 400V850H0Z" fill="#a6b695"/><path d="M0 544L257 364L516 603L799 421L1200 621V850H0Z" fill="#7e997b"/><path d="M0 680Q330 558 651 718Q943 527 1200 610V850H0Z" fill="#486c59"/><path d="M0 790Q307 657 580 790Q926 715 1200 828V850H0Z" fill="#304d3c"/><path d="M423 850Q695 709 714 605Q729 559 779 551" fill="none" stroke="#e0d8ac" stroke-width="35"/><g fill="#253f32"><rect x="937" y="431" width="15" height="211"/><path d="M944 320L888 458H920L866 534H1024L969 458H1000Z"/><rect x="162" y="548" width="12" height="163"/><path d="M168 446L113 584H140L106 646H232L196 584H223Z"/></g><g stroke="#263c31" stroke-width="12" stroke-linecap="round"><path d="M590 659L580 723M598 659L619 720M583 594L557 648M607 594L625 645"/><path d="M694 652L680 716M700 652L719 714M682 590L661 638M706 590L733 613"/></g><g><path d="M573 588Q594 575 616 588L622 659H565Z" fill="#f2d08a"/><circle cx="594" cy="560" r="25" fill="#d4a080"/><path d="M570 556Q571 519 609 533L619 552Z" fill="#283c32"/><path d="M672 585Q696 572 714 585L720 653H665Z" fill="#a9c1b1"/><circle cx="695" cy="557" r="24" fill="#e2b999"/><path d="M670 548Q678 519 706 531Q724 539 721 566L709 547Z" fill="#694f3c"/><path d="M567 599L559 637L578 649L588 604Z" fill="#bf784e"/></g><text x="43" y="803" font-family="Arial" font-size="13" letter-spacing="4" fill="#b9cdb1">A GOOD DAY TO GET LOST.</text></svg>`;
     const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`); const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 850; canvas.getContext('2d')!.drawImage(img, 0, 0);
-    commit(); await restore({ version: 1, image: { src: canvas.toDataURL('image/png'), name: 'a-good-day.png', width: 1200, height: 850 }, balloons: [] }); busy = false;
+    await addImageTab({ version: 1, image: { src: canvas.toDataURL('image/png'), name: 'a-good-day.png', width: 1200, height: 850 }, balloons: [] }); busy = false;
     await addBalloon('speech', 'Are we lost?'); const first = selected()!; first.x = 355; first.y = 255; first.width = 210; first.height = 80; first.spec.tails = [{ tipX: 595, tipY: 554, midpointX: 508, midpointY: 403, autoCurve: true }]; applyText(first); writeSpec(first);
     await addBalloon('speech', 'Only if we stop exploring.'); const second = selected()!; second.x = 744; second.y = 349; second.width = 242; second.height = 91; second.spec.tails = [{ tipX: 700, tipY: 552, midpointX: 769, midpointY: 497, autoCurve: true }]; applyText(second); writeSpec(second); redraw(); refreshInspector(); commit();
   } catch (e) { console.error(e); toast('The sample could not be loaded. Choose a local image to begin.'); } finally { busy = false; }
 });
 
-history.push(project); renderList(); updateHistory(); input('export').disabled = true; input('save-project').disabled = true;
+history.push(project); renderList(); renderTabs(); updateHistory(); input('export').disabled = true; input('save-project').disabled = true;
+workspaceReady = initializeWorkspace();

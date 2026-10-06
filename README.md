@@ -22,14 +22,15 @@ For a fresh checkout, clone with `git clone --recurse-submodules <repository-url
 
 ## Editing
 
-- Choose or drop a PNG, JPEG, WebP, GIF, AVIF, or BMP image. The sample canvas provides a quick way to try the editor.
+- Choose or drop PNG, JPEG, WebP, GIF, AVIF, or BMP images. Each image opens in its own editor tab; multiple files can be selected together. **+ New image** opens another image without replacing existing work. Click a tab to return to it, or its × button to close only that canvas. The sample canvas provides a quick way to try the editor.
 - Click a style in the toolbox to add a balloon. Drag the text or the green grip to move it; drag the corner handle to resize.
 - New balloons inherit the last selected balloon's typeface, size, text color, alignment, bold, and italic settings. These text defaults are remembered in local storage across image changes and page reloads. The chosen toolbox style still determines the new balloon shape. With no remembered settings, the initial font size adapts to the image width; if an imported font is no longer available, the Comic typeface is used.
 - Edit dialogue in the right panel, or double-click it on the canvas. Escape or clicking outside finishes inline editing. Text that exceeds the content box is clipped: enlarge the box or reduce the font size to fit it.
 - Select a balloon, then drag its orange tail handles. The panel also provides precise tip and curve coordinates, automatic/manual curvature, and up to eight tails.
-- Use Fit and the zoom buttons to navigate. Arrow keys move the selected balloon; Shift moves it by ten pixels. Delete/Backspace removes it. Ctrl/⌘ Z and Ctrl/⌘ Shift Z undo/redo, with up to 50 history steps.
-- **Save project** downloads a `.comic.json` file containing the original image, text, position, formatting, and Comical specifications. **Open project** restores it. Replacing an image starts a new canvas; Undo restores the previous one. Work is held in memory until saved, so save a project before refreshing or closing the tab.
-- **Export image** downloads PNG, JPEG, or WebP at the original image dimensions. Editing handles are excluded; the live canvas stays editable. PNG and WebP preserve transparency. JPEG uses a white background. Animated inputs export their rendered frame as a still image.
+- Use Fit and the zoom buttons to navigate. Each image tab keeps its own zoom, selection, edits, and undo history. Arrow keys move the selected balloon; Shift moves it by ten pixels. Delete/Backspace removes it. Ctrl/⌘ Z and Ctrl/⌘ Shift Z undo/redo, with up to 50 history steps per tab during the current session.
+- Open canvases are automatically saved in browser IndexedDB and restored after a reload, including the active tab, text, balloons, and zoom. Closing an editor tab removes it from this saved workspace. Undo history starts fresh after a browser reload. Browser storage is specific to this local site's address; clearing that storage removes its saved workspace.
+- **Save project** downloads the active tab as a `.comic.json` file containing its original image, text, position, formatting, and Comical specifications. **Open project** restores it in a new editor tab. Keep downloaded projects as portable copies, especially before closing a canvas or clearing browser storage.
+- **Export image** asks you to choose both contents and file format every time: **Complete image + balloons**, or **Balloons only**, and PNG, JPEG, or WebP. WebP is disabled in browsers that cannot encode it. Exactly one file downloads at the original image dimensions. Complete export decodes and draws the original image directly before compositing the balloon layer, including on the first download. Editing handles are excluded; the live canvas stays editable. PNG and WebP preserve transparency; balloon-only exports have a transparent background. JPEG uses white for transparent areas. Animated inputs export their rendered frame as a still image.
 
 ## Styles and effects
 
@@ -51,7 +52,7 @@ Limits: 100 balloons per canvas, 30 MB input image, 8192 pixels per side, 32 meg
 
 ## Implementation and checks
 
-`server.mjs` is a small Node HTTP server with no upload or write endpoints. `scripts/build.mjs` bundles `src/app.ts` and `vendor/comical-js/src/index.ts` with esbuild; the submodule source is used directly, without installing its Storybook or older webpack development stack. Paper.js matches the version requested by the submodule. Export uses Comical's non-destructive SVG export and html-to-image to capture both balloon shapes and HTML text.
+`server.mjs` is a small Node HTTP server with no upload or write endpoints. `scripts/build.mjs` bundles `src/app.ts` and `vendor/comical-js/src/index.ts` with esbuild; the submodule source is used directly, without installing its Storybook or older webpack development stack. Paper.js matches the version requested by the submodule. Export uses Comical's non-destructive SVG export and html-to-image for the balloon/text layer, then composites the decoded original image with the Canvas API. `src/workspace.mjs` stores open tabs in IndexedDB; text preferences remain in local storage.
 
 ```sh
 npx playwright install chromium
@@ -59,5 +60,11 @@ npm test
 ```
 
 Tests cover project validation and history, static server boundaries, all balloon styles, movement/resizing, tail dragging, inline text, undo/redo, family deletion, project round trips, and original-resolution PNG/JPEG/WebP exports including transparency and image/balloon pixel checks. Chromium is the tested browser.
+Additional browser checks cover the first download, transparent balloon-only export, independent image tabs, closing tabs, and IndexedDB recovery. To check export and tab recovery in WebKit too:
+
+```sh
+npx playwright install webkit
+npm run test:webkit
+```
 
 The application is covered by the repository's GPL license. Comical JS retains its own MIT license in the submodule. Font assets retain their authors' separate terms, included alongside the files.

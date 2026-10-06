@@ -19,7 +19,7 @@
       <div class="eyebrow">THE TOOLBOX</div><h1>Make it say<br><em>something.</em></h1>
       <p class="intro">A little dialogue goes a long way.</p>
       <button id="upload" class="upload-button"><span class="upload-symbol">↥</span><strong>Choose an image</strong><small>or drop one into the canvas</small></button>
-      <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp" hidden>
+      <input id="image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp" multiple hidden>
       <input id="project-file" type="file" accept="application/json,.json" hidden>
       <div class="section-title"><h2>Add a balloon</h2><span>10 STYLES</span></div>
       <div id="style-library" class="style-library"></div>
@@ -28,8 +28,9 @@
       <div class="library-note"><span>✳</span><p>Everything stays in your browser.<br>Your images are never uploaded.</p></div>
     </aside>
     <section class="workspace" aria-label="Image workspace">
+      <div class="image-tabbar"><div id="image-tabs" role="tablist" aria-label="Open images"></div><button id="new-image-tab" class="new-image-tab" title="Open another image">+ New image</button></div>
       <div class="canvas-toolbar"><div><span class="document-dot"></span><strong id="document-name">A fresh start</strong><span id="dimensions" class="subtle"></span></div><div class="history-actions"><button id="undo" title="Undo (Ctrl/⌘ Z)" aria-label="Undo">↶</button><button id="redo" title="Redo (Ctrl/⌘ Shift Z)" aria-label="Redo">↷</button><span class="separator"></span><button id="fit">Fit</button><button id="zoom-out" aria-label="Zoom out">−</button><span id="zoom-label">100%</span><button id="zoom-in" aria-label="Zoom in">+</button></div></div>
-      <div id="viewport" class="viewport">
+      <div id="viewport" class="viewport" role="tabpanel">
         <div id="empty-state" class="empty-state"><div class="empty-illustration">hello<span>✦</span></div><h2>Every image has a story.</h2><p>Choose a photo, add a balloon, and find its voice.</p><button id="empty-upload" class="primary">Choose an image ↥</button><button id="demo" class="text-button">Try the sample canvas →</button></div>
         <div id="stage-wrapper" hidden><div id="stage"><img id="background" alt="Your comic canvas" draggable="false"><div id="selection" hidden><button id="move-handle" title="Drag to move balloon" aria-label="Move balloon">⠿</button><button id="resize-handle" title="Drag to resize balloon" aria-label="Resize balloon"></button></div></div></div>
       </div>
@@ -59,7 +60,7 @@
     </aside>
   </main>
   <div id="toast" role="status" aria-live="polite" hidden></div>
-  <dialog id="export-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close export dialog">×</button></form><div class="eyebrow">READY FOR THE WORLD</div><h2>Take your story with you.</h2><p>Your image exports at its original resolution,<br>with all balloons and without editing handles.</p><label>Format<select id="export-format"><option value="png">PNG · lossless, transparency</option><option value="jpeg">JPEG · smaller file</option><option value="webp">WebP · compact, transparency</option></select></label><label id="quality-field" hidden>Quality<input id="export-quality" type="range" min="0.1" max="1" value="0.95" step="0.05"></label><p id="export-dimensions" class="field-help"></p><button id="download" class="primary full">Download image ↗</button></dialog>
+  <dialog id="export-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close export dialog">×</button></form><div class="eyebrow">READY FOR THE WORLD</div><h2>Take your story with you.</h2><p>Choose what to download at the original resolution,<br>without editing handles.</p><label>Contents<select id="export-content"><option value="">Choose what to download…</option><option value="complete">Complete image + balloons</option><option value="balloons">Balloons only</option></select></label><p id="export-content-help" class="field-help"></p><label>Format<select id="export-format"><option value="">Choose an image format…</option><option value="png">PNG · lossless, transparency</option><option value="jpeg">JPEG · smaller file</option><option value="webp">WebP · compact, transparency</option></select></label><label id="quality-field" hidden>Quality<input id="export-quality" type="range" min="0.1" max="1" value="0.95" step="0.05"></label><p id="export-dimensions" class="field-help"></p><button id="download" class="primary full" disabled>Download image ↗</button></dialog>
   <script src="/app.js" defer></script>
 </body>
 </html>
