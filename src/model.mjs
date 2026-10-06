@@ -8,6 +8,13 @@ export const fonts = {
   sans: 'Arial, Helvetica, sans-serif', serif: 'Georgia, "Times New Roman", serif',
   mono: '"Courier New", monospace',
 };
+export function registerFonts(catalog) {
+  for (const font of catalog) {
+    if (typeof font.id === 'string' && typeof font.family === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(font.id) && !['__proto__', 'constructor', 'prototype'].includes(font.id) && !Object.hasOwn(fonts, font.id)) {
+      fonts[font.id] = `${JSON.stringify(font.family)}, ${fonts.comic}`;
+    }
+  }
+}
 export const MAX_PIXELS = 32_000_000;
 export const MAX_DIMENSION = 8192;
 const finite = (n, min, max) => typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max;

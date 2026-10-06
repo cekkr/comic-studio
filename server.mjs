@@ -3,11 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildClient } from './scripts/build.mjs';
+import { discoverFonts, fontStylesheet } from './scripts/fonts.mjs';
 
 const publicRoot = path.resolve(fileURLToPath(new URL('./public/', import.meta.url)));
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.map': 'application/json' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.map': 'application/json', '.json': 'application/json', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8' };
 
-export function createServer() {
+export function createServer({ fontsRoot = path.join(publicRoot, 'fonts') } = {}) {
   return http.createServer(async (req, res) => {
     if (!['GET', 'HEAD'].includes(req.method)) {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
@@ -15,9 +16,17 @@ export function createServer() {
     }
     try {
       const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+      if (pathname === '/fonts/catalog.json' || pathname === '/fonts/fonts.css') {
+        const fonts = await discoverFonts(fontsRoot), css = pathname.endsWith('.css');
+        res.writeHead(200, { 'Content-Type': css ? types['.css'] : types['.json'], 'Cache-Control': 'no-store' });
+        res.end(req.method === 'HEAD' ? undefined : css ? fontStylesheet(fonts) : JSON.stringify({ fonts }));
+        return;
+      }
       const filename = pathname === '/' ? 'index.html' : pathname.slice(1);
-      const resolved = path.resolve(publicRoot, filename);
-      if (!resolved.startsWith(publicRoot + path.sep) || filename.startsWith('.')) {
+      const fontRequest = pathname.startsWith('/fonts/'), root = fontRequest ? path.resolve(fontsRoot) : publicRoot;
+      const relative = fontRequest ? pathname.slice('/fonts/'.length) : filename;
+      const resolved = path.resolve(root, relative);
+      if (!resolved.startsWith(root + path.sep) || relative.split('/').some(part => part.startsWith('.'))) {
         res.writeHead(403).end('Forbidden');
         return;
       }

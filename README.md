@@ -34,7 +34,15 @@ For a fresh checkout, clone with `git clone --recurse-submodules <repository-url
 
 The palette exposes all implemented Comical styles: speech, thought, shout, ellipse, pointed arcs (Burst), circle, caption, caption with a tail, rectangle, and text only.
 
-Available settings include solid/transparent fill, vertical gradients with up to eight colors, a colored double outline, shadow offset, corner X/Y radii for rectangular styles, and tail coordinates and automatic curvature. Typography controls include four local font families, size, color, bold, italic, and alignment.
+Available settings include solid/transparent fill, vertical gradients with up to eight colors, a colored double outline, shadow offset, corner X/Y radii for rectangular styles, and tail coordinates and automatic curvature. Typography controls include five font families, size, color, bold, italic, and alignment.
+
+### Anime Ace 2.0 BB
+
+Select **Anime Ace 2.0 BB** in the Typeface menu. Its regular, bold, and italic TTF files are included under `public/fonts/anime-ace`, together with the author's original `font info.txt` usage terms. The editor uses these project files without requiring a Downloads folder or system font installation. The combined bold/italic setting uses browser synthesis. Image export embeds the font while rendering, preserving the lettering in the resulting raster image. Projects retain the typeface selection.
+
+### Import more fonts
+
+Create a family folder inside **`public/fonts`**, add its TTF/OTF/WOFF/WOFF2 files and usage terms, and describe the faces in `font.json`. Refresh the editor to discover the family automatically; no source-code changes or server restart are needed. See [`public/fonts/README.md`](public/fonts/README.md) for the manifest format and a complete example. Save your project before refreshing. When sharing a saved project that uses an imported family, include its font folder in the receiving editor too.
 
 **Position & connections** exposes family/layer and order. Connect a balloon to its predecessor to create a linked family, or make it independent. Family members share the first balloon's appearance; overlapping shapes merge. Comical renders shape layers beneath the HTML text. `borderStyle` and independent tail `style` fields are documented upstream as unimplemented, so the editor does not expose them as working effects. Comical fixes the main outline to black and sets its thickness by shape.
 
@@ -51,4 +59,4 @@ npm test
 
 Tests cover project validation and history, static server boundaries, all balloon styles, movement/resizing, tail dragging, inline text, undo/redo, family deletion, project round trips, and original-resolution PNG/JPEG/WebP exports including transparency and image/balloon pixel checks. Chromium is the tested browser.
 
-The application is covered by the repository's GPL license. Comical JS retains its own MIT license in the submodule.
+The application is covered by the repository's GPL license. Comical JS retains its own MIT license in the submodule. Font assets retain their authors' separate terms, included alongside the files.

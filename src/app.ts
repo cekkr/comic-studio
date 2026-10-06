@@ -1,7 +1,7 @@
 import { Bubble, Comical } from '../vendor/comical-js/src/index';
 import type { BubbleSpec, TailSpec } from '../vendor/comical-js/src/bubbleSpec';
 import { toCanvas } from 'html-to-image';
-import { styles, fonts, History, clamp, validateProject, MAX_PIXELS, MAX_DIMENSION } from './model.mjs';
+import { styles, fonts, registerFonts, History, clamp, validateProject, MAX_PIXELS, MAX_DIMENSION } from './model.mjs';
 
 type Balloon = { id: string; text: string; x: number; y: number; width: number; height: number; fontFamily: string; fontSize: number; textColor: string; align: string; bold: boolean; italic: boolean; spec: BubbleSpec };
 type Project = { version: number; image: { src: string; name: string; width: number; height: number } | null; balloons: Balloon[] };
@@ -16,6 +16,12 @@ let selectedId: string | null = null, tailIndex = 0, zoom = 1, fitted = true, bu
 let historyTimer: ReturnType<typeof setTimeout>, toastTimer: ReturnType<typeof setTimeout>;
 const selected = () => project.balloons.find(b => b.id === selectedId);
 const element = (b: Balloon) => stage.querySelector<HTMLElement>(`[data-id="${CSS.escape(b.id)}"]`)!;
+const systemFontIds = new Set(Object.keys(fonts));
+const fontCatalogReady = fetch('/fonts/catalog.json').then(async response => {
+  if (!response.ok) throw new Error('Font catalog is unavailable.');
+  const { fonts: catalog } = await response.json(); registerFonts(catalog);
+  for (const font of catalog) if (!systemFontIds.has(font.id)) $<HTMLSelectElement>('font-family').add(new Option(font.name, font.id));
+}).catch(() => toast('Custom fonts could not be loaded. Refresh the editor to try again.'));
 
 function toast(message: string) {
   $('toast').textContent = message; $('toast').hidden = false;
@@ -38,6 +44,8 @@ function updateHistory() { input('undo').disabled = !history.canUndo; input('red
 
 function applyText(b: Balloon, el = element(b)) {
   Object.assign(el.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.width}px`, height: `${b.height}px`, fontFamily: fonts[b.fontFamily], fontSize: `${b.fontSize}px`, color: b.textColor, textAlign: b.align, fontWeight: b.bold ? '700' : '400', fontStyle: b.italic ? 'italic' : 'normal' });
+  // Imported families may not supply every weight/style combination.
+  el.style.fontSynthesis = systemFontIds.has(b.fontFamily) ? 'none' : 'weight style';
   if (el.contentEditable !== 'true') el.firstElementChild!.textContent = b.text;
 }
 function writeSpec(b: Balloon) { new Bubble(element(b)).setBubbleSpec(structuredClone(b.spec)); }
@@ -344,6 +352,7 @@ input('project-file').addEventListener('change', async () => {
   if (file.size > 50_000_000) return toast('Choose a project smaller than 50 MB.');
   busy = true;
   try {
+    await fontCatalogReady;
     const data = validateProject(JSON.parse(await file.text())); const image = await loadImage(data.image.src);
     if (image.naturalWidth !== data.image.width || image.naturalHeight !== data.image.height) throw new Error('Project image dimensions do not match the embedded image.');
     commit(); await restore(data); commit(); toast('Project opened. Your story is ready to edit.');
@@ -366,7 +375,7 @@ $('download').addEventListener('click', async () => {
     // Move the host offscreen, leaving the exported node itself at its origin.
     exportHost = document.createElement('div'); exportHost.className = 'export-copy'; exportHost.append(copy); document.body.append(exportHost);
     const format = value('export-format');
-    const canvas = await toCanvas(copy, { width: project.image.width, height: project.image.height, pixelRatio: 1, skipAutoScale: true, skipFonts: true, backgroundColor: format === 'jpeg' ? '#ffffff' : undefined });
+    const canvas = await toCanvas(copy, { width: project.image.width, height: project.image.height, pixelRatio: 1, skipAutoScale: true, skipFonts: false, backgroundColor: format === 'jpeg' ? '#ffffff' : undefined });
     const mime = `image/${format}`;
     const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(b => b ? resolve(b) : reject(new Error('The browser could not encode this image.')), mime, Number(value('export-quality'))));
     const actualExtension = blob.type === mime ? format : 'png';

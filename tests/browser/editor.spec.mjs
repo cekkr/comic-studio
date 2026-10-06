@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, copyFile, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
 
 async function sample(page) {
   await page.goto('/'); await page.getByRole('button', { name: 'Try the sample canvas' }).click();
@@ -97,4 +98,51 @@ test('local upload, transparent image, JPEG and WebP export', async ({ page }) =
   }
   await page.locator('#delete').click(); await expect(page.locator('.comic-text')).toHaveCount(0); const download = await exportImage(page); expect((await readFile(await download.path())).length).toBeGreaterThan(100);
   expect(errors).toEqual([]);
+});
+
+test('bundled Anime Ace loads its faces and preserves glyphs in image exports and projects', async ({ page }) => {
+  const errors = watchErrors(page); await page.goto('/');
+  const data = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 640; c.height = 480; const ctx = c.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 640, 480); return c.toDataURL('image/png').split(',')[1]; });
+  await page.locator('#image-file').setInputFiles({ name: 'font.png', mimeType: 'image/png', buffer: Buffer.from(data, 'base64') });
+  await expect(page.locator('#document-name')).toHaveText('font.png'); await page.getByRole('button', { name: 'Text only', exact: true }).click();
+  await page.locator('#text').fill('MANGA!'); await page.locator('#font-size').fill('28'); await page.locator('#font-family').selectOption('anime-ace');
+  const cdp = await page.context().newCDPSession(page); await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
+  for (const variant of ['regular', 'bold', 'italic', 'bold-italic']) {
+    if (variant === 'bold' || variant === 'bold-italic') await page.locator('#bold').click();
+    if (variant === 'italic') { await page.locator('#bold').click(); await page.locator('#italic').click(); }
+    await page.evaluate(() => document.fonts.ready);
+    const { root } = await cdp.send('DOM.getDocument'); const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: '.comic-text > span' });
+    await expect.poll(async () => (await cdp.send('CSS.getPlatformFontsForNode', { nodeId })).fonts.some(font => font.isCustomFont && /Anime Ace/i.test(font.familyName))).toBe(true);
+    const download = await exportImage(page); const bytes = await readFile(await download.path());
+    const widths = await page.evaluate(async data => {
+      const text = document.querySelector('.comic-text'); const box = getComputedStyle(text); const img = new Image(); img.src = `data:image/png;base64,${data}`; await img.decode();
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const x = Math.round(parseFloat(box.left)), y = Math.round(parseFloat(box.top)), width = Math.round(parseFloat(box.width)), height = Math.round(parseFloat(box.height));
+      const pixels = ctx.getImageData(x, y, width, height).data; let left = width, right = -1;
+      for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) { const i = (py * width + px) * 4; if (pixels[i] < 90 && pixels[i + 1] < 90 && pixels[i + 2] < 90) { left = Math.min(left, px); right = Math.max(right, px); } }
+      ctx.font = `${box.fontStyle} ${box.fontWeight} 27.9px "Anime Ace 2.0 BB"`; const anime = ctx.measureText('MANGA!').width;
+      ctx.font = `${box.fontStyle} ${box.fontWeight} 27.9px Arial`; const sans = ctx.measureText('MANGA!').width;
+      return { exported: right - left + 1, anime, sans };
+    }, bytes.toString('base64'));
+    expect(Math.abs(widths.exported - widths.anime)).toBeLessThan(6); expect(Math.abs(widths.exported - widths.anime)).toBeLessThan(Math.abs(widths.exported - widths.sans));
+  }
+  const saved = await savedProject(page); expect(saved.balloons[0].fontFamily).toBe('anime-ace');
+  await page.locator('#project-file').setInputFiles({ name: 'anime.comic.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(saved)) });
+  await expect(page.locator('#toast')).toContainText('Project opened'); await expect(page.locator('#font-family')).toHaveValue('anime-ace'); expect(errors).toEqual([]);
+});
+
+test('adding a font folder discovers its typeface without server restart or source changes', async ({ page }) => {
+  const folder = path.resolve('public/fonts/test-import');
+  await mkdir(folder);
+  try {
+    await copyFile('public/fonts/anime-ace/animeace2_reg.ttf', path.join(folder, 'regular.ttf'));
+    await writeFile(path.join(folder, 'font.json'), JSON.stringify({ id: 'test-import', name: 'Imported Test Font', family: 'Imported Test Font', faces: [{ file: 'regular.ttf', weight: 400, style: 'normal' }] }));
+    await sample(page); await page.locator('#font-family').selectOption('test-import');
+    await page.evaluate(() => document.fonts.ready);
+    expect(await page.locator('.comic-text').last().evaluate(el => getComputedStyle(el).fontFamily)).toContain('Imported Test Font');
+    const saved = await savedProject(page); expect(saved.balloons[1].fontFamily).toBe('test-import');
+    await page.locator('#project-file').setInputFiles({ name: 'imported.comic.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(saved)) });
+    await expect(page.locator('#toast')).toContainText('Project opened'); await expect(page.locator('#font-family')).toHaveValue('test-import');
+    const download = await exportImage(page); expect((await readFile(await download.path())).readUInt32BE(16)).toBe(1200);
+  } finally { await rm(folder, { recursive: true }); }
 });
