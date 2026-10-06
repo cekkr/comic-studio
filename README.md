@@ -2,6 +2,8 @@
 
 A local image editor powered directly by the [Comical JS](https://github.com/BloomBooks/comical-js) Git submodule. Choose an image, add and edit comic balloons, and export the finished image at its original resolution. Images and projects stay in the browser; the Node server only serves static application files.
 
+![Comic Studio](md-assets/screenshot_0.png)
+
 ## Run locally
 
 Install Node.js 22 or newer, then:

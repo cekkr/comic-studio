@@ -153,3 +153,4 @@ public/app.js
 public/app.js.map
 playwright-report/
 test-results/
+.DS_Store
