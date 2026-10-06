@@ -9,7 +9,10 @@ A local image editor powered directly by the [Comical JS](https://github.com/Blo
 Install Node.js 22 or newer, then:
 
 ```sh
+git clone https://github.com/cekkr/comic-studio.git --recurse-submodules
+# or normal clone and then
 git submodule update --init --recursive
+
 npm install
 npm start
 ```
