@@ -1,0 +1,3 @@
+[submodule "vendor/comical-js"]
+	path = vendor/comical-js
+	url = https://github.com/BloomBooks/comical-js.git

@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Generated browser bundle and browser test artifacts
+public/app.js
+public/app.js.map
+playwright-report/
+test-results/
